@@ -10,6 +10,8 @@
 #include "utils/dct.h"
 #include <string>
 #include <chrono>
+#include <future>   // std::async, std::future
+#include <omp.h>    // OpenMP
 
 Image<float> get_srm_3x3() {
     Image<float> kernel(3, 3, 1);
@@ -64,15 +66,23 @@ Image<unsigned char> compute_dct(const Image<unsigned char> &image, int block_si
     Image<float> grayscale = image.convert<float>().to_grayscale();
     std::vector<Block<float>> blocks = grayscale.get_blocks(block_size);
 
-    for(int i=0;i<blocks.size();i++){
+    // PARALELISMO DE DATOS con OpenMP:
+    // Cada bloque 8x8 es completamente independiente (no comparte memoria de escritura
+    // con otros bloques). dctBlock se crea localmente en cada iteracion, por lo que
+    // no hay condicion de carrera. schedule(dynamic) reparte bloques conforme los
+    // hilos quedan libres.
+    #pragma omp parallel for schedule(dynamic)
+    for(int i=0; i<(int)blocks.size(); i++){
         float **dctBlock = dct::create_matrix(block_size, block_size);
         dct::direct(dctBlock, blocks[i], 0);
         if (invert) {
-          for(int k=0;k<blocks[i].size/2;k++)
-            for(int l=0;l<blocks[i].size/2;l++)
-              dctBlock[k][l] = 0.0;
-          dct::inverse(blocks[i], dctBlock, 0, 0.0, 255.);
-        }else dct::assign(dctBlock, blocks[i], 0);
+            for(int k=0; k<blocks[i].size/2; k++)
+                for(int l=0; l<blocks[i].size/2; l++)
+                    dctBlock[k][l] = 0.0;
+            dct::inverse(blocks[i], dctBlock, 0, 0.0, 255.);
+        } else {
+            dct::assign(dctBlock, blocks[i], 0);
+        }
         dct::delete_matrix(dctBlock);
     }
     Image<unsigned char> result = grayscale.convert<unsigned char>();
@@ -97,17 +107,39 @@ Image<unsigned char> compute_ela(const Image<unsigned char> &image, int quality)
 
 int main(int argc, char **argv) {
     if(argc == 1) {
-        std::cerr<<"Image filename missing from arguments. Usage ./dct <filename>"<<std::endl;
+        std::cerr<<"Image filename missing from arguments. Usage ./detect <filename>"<<std::endl;
         exit(1);
     }
-    int block_size=8;
+
+    int block_size = 8;
     Image<unsigned char> image = load_from_file(argv[1]);
-    Image<unsigned char> srm3x3 = compute_srm(image, 3);
-    save_to_file("srm_kernel_3x3.png", srm3x3);
-    save_to_file("srm_kernel_5x5.png", compute_srm(image, 5));
-    save_to_file("ela.png", compute_ela(image, 90));
-    save_to_file("dct_invert.png", compute_dct(image, block_size, true));
-    save_to_file("dct_direct.png", compute_dct(image, block_size, false));
+
+    auto total_begin = std::chrono::steady_clock::now();
+    
+
+    omp_set_num_threads(3);
+
+    std::future<Image<unsigned char>> f_srm3 = std::async(std::launch::async,
+        compute_srm, std::cref(image), 3);
+    std::future<Image<unsigned char>> f_srm5 = std::async(std::launch::async,
+        compute_srm, std::cref(image), 5);
+    std::future<Image<unsigned char>> f_ela = std::async(std::launch::async,
+        compute_ela, std::cref(image), 90);
+    std::future<Image<unsigned char>> f_dct_inv = std::async(std::launch::async,
+        compute_dct, std::cref(image), block_size, true);
+    std::future<Image<unsigned char>> f_dct_dir = std::async(std::launch::async,
+        compute_dct, std::cref(image), block_size, false);
+
+    save_to_file("srm_kernel_3x3.png", f_srm3.get());
+    save_to_file("srm_kernel_5x5.png", f_srm5.get());
+    save_to_file("ela.png",            f_ela.get());
+    save_to_file("dct_invert.png",     f_dct_inv.get());
+    save_to_file("dct_direct.png",     f_dct_dir.get());
+
+    auto total_end = std::chrono::steady_clock::now();
+    std::cout<<"Total parallel elapsed time: "
+             <<std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_begin).count()
+             <<"ms"<<std::endl;
 
     return 0;
 }

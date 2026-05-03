@@ -1,13 +1,14 @@
 cmake_minimum_required(VERSION 3.15)
-project(detect)
 
-add_subdirectory(utils)
+# 1. Buscar el paquete de OpenMP
+find_package(OpenMP REQUIRED)
 
-include_directories(${PROJECT_SOURCE_DIR})
 include_directories(${PNG_INCLUDE_DIR})
 include_directories(${JPEG_INCLUDE_DIR})
 
-set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
+add_library(utils utils/image.h utils/image.cc utils/dct.h utils/dct.cc)
 
-add_executable(${PROJECT_NAME} main.cc)
-target_link_libraries(${PROJECT_NAME} PNG::PNG JPEG::JPEG utils)
+# 2. Enlazar OpenMP::OpenMP_CXX a librería
+target_link_libraries(utils PNG::PNG JPEG::JPEG OpenMP::OpenMP_CXX)
+add_executable(detect main.cc)
+target_link_libraries(detect utils OpenMP::OpenMP_CXX)

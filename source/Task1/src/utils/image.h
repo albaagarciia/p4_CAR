@@ -5,6 +5,7 @@
 #include <iostream>
 #include "assert.h"
 #include <string>
+#include <omp.h>
 
 template <typename T> class Block;
 
@@ -174,6 +175,11 @@ template <class T> Image<T> Image<T>::convolution(const Image<float> &kernel) co
     assert(kernel.width%2 != 0 && kernel.height%2 != 0 && kernel.width == kernel.height && kernel.channels==1);
     int kernel_size = kernel.width;
     Image<T> convolved(width, height, channels);
+    // PARALELISMO DE DATOS con OpenMP:
+    // Cada fila j es independiente: solo lee de 'this' (solo lectura) y escribe
+    // en 'convolved' en posiciones distintas. Las variables i, c, u, v, s, t, sum
+    // son privadas por estar declaradas dentro del bloque paralelo.
+    #pragma omp parallel for schedule(dynamic)
     for(int j=0;j<height;j++){
         for(int i=0;i<width; i++){
             for(int c=0;c<channels;c++){
@@ -222,25 +228,21 @@ template <class T> Image<float> Image<T>::normalized() const {
     Image<float> new_image(width, height, channels);
     float max_value = -999999999;
     float min_value = 999999999;
+    // reduction: cada hilo calcula su propio min/max local y OpenMP los combina
+    #pragma omp parallel for reduction(max:max_value) reduction(min:min_value)
     for(int j=0;j<height;j++)
-    {
-        for(int i=0;i<width;i++){
+        for(int i=0;i<width;i++)
             for(int c=0;c<channels;c++){
                 if (this->get(j,i,c) > max_value) max_value = this->get(j,i,c);
                 if (this->get(j,i,c) < min_value) min_value = this->get(j,i,c);
             }
-        }    
-    }
 
+    #pragma omp parallel for
     for(int j=0;j<height;j++)
-    {
-        for(int i=0;i<width;i++){
-            for(int c=0;c<channels;c++){
+        for(int i=0;i<width;i++)
+            for(int c=0;c<channels;c++)
                 new_image.set(j,i,c, (this->get(j, i, c)-min_value) / (max_value - min_value));
-            }
-        }    
-    }
-        
+
     return new_image;
 }
 
